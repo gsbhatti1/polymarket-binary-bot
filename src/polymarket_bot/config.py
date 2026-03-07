@@ -29,3 +29,14 @@ class Settings:
     paper_latency_ms: int = int(os.getenv("PM_PAPER_LATENCY_MS", "0"))
     default_market_price: Decimal = _d("PM_DEFAULT_MARKET_PRICE", "0.52")
     replay_path: str = os.getenv("PM_REPLAY_PATH", "replay/sample_btc_book.jsonl")
+
+    # Loop control
+    poll_interval_sec: int = int(os.getenv("PM_POLL_INTERVAL_SEC", "30"))
+    resolve_check_every: int = int(os.getenv("PM_RESOLVE_CHECK_EVERY", "10"))
+
+    # Exit management
+    stop_loss_pct: Decimal = _d("PM_STOP_LOSS_PCT", "0.30")
+    take_profit_pct: Decimal = _d("PM_TAKE_PROFIT_PCT", "0.50")
+
+    # Market discovery
+    min_market_volume: float = float(os.getenv("PM_MIN_MARKET_VOLUME", "10000"))
