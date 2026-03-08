@@ -61,18 +61,31 @@ class BotService:
         )
 
         bankroll_for_sizing = self.db.cash_balance(self.settings.bankroll_usdc)
-        sizing = self.strategy.decide(market, bankroll_usdc=bankroll_for_sizing)
+
+        # Check if we already hold a position in this market
+        current_pos = self.db.get_position(market_id)
+        current_qty = Decimal(current_pos["yes_qty"]) if current_pos else Decimal("0")
+
+        sizing = self.strategy.decide(market, bankroll_usdc=bankroll_for_sizing, current_position_qty=current_qty)
 
         if sizing.target_notional_usdc <= 0:
             return RunResult(market_id, self.adapter.mode, sizing.reason, None, None, Decimal("0"), Decimal("0"))
 
         today = day_prefix(ts)
-        pre = self.risk.pre_trade_check(market_id, sizing.target_notional_usdc, today)
-        if not pre.allowed:
-            self.db.add_kill_event(ts=ts, kill_name="pre_trade_risk_block", market_id=market_id, reason=pre.reason)
-            return RunResult(market_id, self.adapter.mode, pre.reason, None, None, Decimal("0"), Decimal("0"))
 
-        quantity = (sizing.target_notional_usdc / sizing.limit_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+        # Skip risk check for exits — selling reduces exposure
+        if sizing.side != "SELL_YES":
+            pre = self.risk.pre_trade_check(market_id, sizing.target_notional_usdc, today)
+            if not pre.allowed:
+                self.db.add_kill_event(ts=ts, kill_name="pre_trade_risk_block", market_id=market_id, reason=pre.reason)
+                return RunResult(market_id, self.adapter.mode, pre.reason, None, None, Decimal("0"), Decimal("0"))
+
+        if sizing.side == "SELL_YES":
+            # For sells, quantity = shares to sell (not notional/price)
+            quantity = current_qty  # sell entire position
+        else:
+            quantity = (sizing.target_notional_usdc / sizing.limit_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+
         order = OrderRequest(
             market_id=market_id,
             side=sizing.side,
@@ -111,9 +124,23 @@ class BotService:
         )
 
         if fill.filled_qty > 0:
-            spent = (fill.filled_qty * fill.avg_price) + fill.fee_paid
-            self.db.add_cash_entry(fill.ts, "buy_yes", -spent, market_id=market_id, note=fill.status)
-            self.db.upsert_yes_position(fill.ts, market_id, fill.filled_qty, fill.avg_price)
-            return RunResult(market_id, self.adapter.mode, sizing.reason, fill.order_id, fill.status, fill.filled_qty, spent)
+            if sizing.side == "SELL_YES":
+                # SELL path: credit cash, reduce position
+                proceeds = (fill.filled_qty * fill.avg_price) - fill.fee_paid
+                self.db.add_cash_entry(fill.ts, "sell_yes", proceeds, market_id=market_id, note=fill.status)
+                # Reduce position (negative qty)
+                self.db.upsert_yes_position(fill.ts, market_id, -fill.filled_qty, fill.avg_price)
+                # Record realized PnL
+                if current_pos:
+                    avg_cost = Decimal(current_pos["avg_yes_cost"])
+                    pnl = (fill.avg_price - avg_cost) * fill.filled_qty
+                    self.db.add_realized_pnl(fill.ts, market_id, pnl, note="sell_exit")
+                return RunResult(market_id, self.adapter.mode, sizing.reason, fill.order_id, fill.status, fill.filled_qty, proceeds)
+            else:
+                # BUY path (original)
+                spent = (fill.filled_qty * fill.avg_price) + fill.fee_paid
+                self.db.add_cash_entry(fill.ts, "buy_yes", -spent, market_id=market_id, note=fill.status)
+                self.db.upsert_yes_position(fill.ts, market_id, fill.filled_qty, fill.avg_price)
+                return RunResult(market_id, self.adapter.mode, sizing.reason, fill.order_id, fill.status, fill.filled_qty, spent)
 
         return RunResult(market_id, self.adapter.mode, sizing.reason, fill.order_id, fill.status, Decimal("0"), Decimal("0"))

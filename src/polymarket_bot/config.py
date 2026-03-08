@@ -33,6 +33,7 @@ class Settings:
     # Loop control
     poll_interval_sec: int = int(os.getenv("PM_POLL_INTERVAL_SEC", "30"))
     resolve_check_every: int = int(os.getenv("PM_RESOLVE_CHECK_EVERY", "10"))
+    replay_tick_delay_ms: int = int(os.getenv("PM_REPLAY_TICK_DELAY_MS", "100"))
 
     # Exit management
     stop_loss_pct: Decimal = _d("PM_STOP_LOSS_PCT", "0.30")

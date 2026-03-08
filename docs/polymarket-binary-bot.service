@@ -1,0 +1,15 @@
+[Unit]
+Description=Polymarket Binary Bot
+After=network.target
+
+[Service]
+Type=simple
+User=polymarket
+WorkingDirectory=/home/polymarket/polymarket-binary-bot
+EnvironmentFile=/home/polymarket/polymarket-binary-bot/.env
+ExecStart=/home/polymarket/polymarket-binary-bot/.venv/bin/python run_bot.py --mode live_feed --market will-x-happen --prior 0.55 --db data/bot.db
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
