@@ -177,6 +177,16 @@ class LivePolymarketAdapter(ExchangeAdapter):
         avg_price = Decimal(str(resp.get("avgPrice", price) or price))
         fee = filled_size * avg_price * Decimal("0.001")  # ~10 bps estimate
 
+        # ── Slippage protection ──────────────────────────────
+        if filled_size > 0:
+            expected = float(order.limit_price)
+            actual = float(avg_price)
+            if expected > 0:
+                slippage_bps = abs(actual - expected) / expected * 10000
+                if slippage_bps > 50:  # >0.5% slippage
+                    log.warning("HIGH SLIPPAGE: %.1f bps (expected=%.4f actual=%.4f) on %s",
+                                slippage_bps, expected, actual, order.market_id)
+
         fill_status = "filled" if filled_size >= order.quantity else "partial" if filled_size > 0 else "unfilled"
 
         log.info(

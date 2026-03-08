@@ -222,3 +222,14 @@ class Database:
     def count_rows(self, table: str) -> int:
         cur = self.conn.execute(f"SELECT COUNT(*) AS c FROM {table}")
         return int(cur.fetchone()["c"])
+    def current_equity(self, initial_bankroll: Decimal) -> Decimal:
+        """Calculate current equity = cash + open notional."""
+        return self.cash_balance(initial_bankroll) + self.sum_open_notional()
+
+    def get_open_positions(self) -> list[dict]:
+        """Get all positions with qty > 0."""
+        rows = self.conn.execute(
+            "SELECT market_id, yes_qty, avg_yes_cost, realized_pnl, updated_ts "
+            "FROM positions WHERE CAST(yes_qty AS REAL) > 0"
+        ).fetchall()
+        return [dict(r) for r in rows]

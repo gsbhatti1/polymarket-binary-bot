@@ -51,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--once", action="store_true", help="Run single tick and exit (original behavior)")
     parser.add_argument("--evidence", nargs="*", default=None,
                         help="Manual evidence for --once mode: flow:+0.12 news:+0.08")
+    parser.add_argument("--auto-discover", action="store_true",
+                        help="Auto-discover tradeable markets from Polymarket (live_feed/live modes)")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     return parser.parse_args()
 
@@ -102,6 +104,7 @@ def run_continuous(args: argparse.Namespace) -> None:
         markets=args.market if isinstance(args.market, list) else [args.market],
         prior=Decimal(args.prior),
         max_ticks=args.ticks,
+        auto_discover=getattr(args, "auto_discover", False),
     )
 
 

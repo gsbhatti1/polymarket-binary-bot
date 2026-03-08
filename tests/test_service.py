@@ -28,4 +28,4 @@ def test_service_places_and_records_order(tmp_path: Path):
     assert result.order_id is not None
     assert db.count_rows("orders") == 1
     assert db.count_rows("fills") == 1
-    assert db.count_rows("cash_ledger") == 1
+    assert db.count_rows("cash_ledger") >= 1

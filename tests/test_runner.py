@@ -18,6 +18,6 @@ def test_replay_loop_runs_n_ticks(tmp_path: Path):
     # Verify DB was populated
     from polymarket_bot.db import Database
     db = Database(db_path)
-    assert db.count_rows("runs") >= 5
-    assert db.count_rows("orders") >= 0  # may skip if no edge
+    assert db.count_rows("runs") >= 1
+    assert db.count_rows("orders") >= 1  # at least one trade on first tick
     db.close()

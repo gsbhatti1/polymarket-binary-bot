@@ -29,6 +29,7 @@ from .service import BotService
 from .signals import generate_signals
 from .strategy import BayesianKellyStrategy
 from . import telegram
+from .market_filter import check_market_quality
 
 log = logging.getLogger("polymarket-bot")
 
@@ -68,6 +69,7 @@ def run_loop(
     markets: list[str],
     prior: Decimal = Decimal("0.50"),
     max_ticks: int = 0,
+    auto_discover: bool = False,
 ) -> None:
     """
     Main continuous loop.
@@ -86,11 +88,40 @@ def run_loop(
     settings = Settings()
     service = build_service(mode, db_path, settings)
 
-    # Set up resolver for position exits (only with real feed)
+    # Set up resolver for position exits
     resolver = None
     if mode in ("live_feed", "live"):
         feed = PolymarketFeed()
         resolver = Resolver(service.db, feed)
+
+    # In replay mode, create a lightweight resolver that uses replay book prices
+    replay_resolver = None
+    if mode == "replay" and hasattr(service.adapter, "replay"):
+        replay_resolver = True  # flag — we'll check exits manually using book data
+
+    # ── Auto-discover markets if requested ────────────────
+    if auto_discover and mode in ("live_feed", "live"):
+        try:
+            feed_disc = PolymarketFeed()
+            discovered = feed_disc.fetch_active_binary_markets(
+                limit=settings.auto_discover_limit * 3,
+                min_volume=settings.min_market_volume,
+            )
+            if discovered:
+                disc_slugs = [m.slug for m in discovered[:settings.auto_discover_limit]]
+                log.info("[DISCOVER] Found %d tradeable markets: %s", len(disc_slugs), disc_slugs[:5])
+                markets = disc_slugs
+            else:
+                log.warning("[DISCOVER] No markets found, using provided list")
+        except Exception as e:
+            log.warning("[DISCOVER] Auto-discover failed: %r, using provided list", e)
+
+    # ── In replay mode, discover markets from the replay file ──
+    if mode == "replay" and hasattr(service.adapter, "replay"):
+        replay_markets = service.adapter.replay.market_ids
+        if replay_markets and markets == ["BTC_UP"]:
+            markets = replay_markets
+            log.info("[REPLAY] Found %d markets in replay file: %s", len(markets), markets[:8])
 
     tick = 0
     log.info(
@@ -110,6 +141,57 @@ def run_loop(
         tick_traded = False
         for market_slug in markets:
             try:
+                # Skip BUYING if we already hold a position in this market
+                # But still let the strategy evaluate for potential SELL
+                existing = service.db.get_position(market_slug)
+                already_holding = existing and Decimal(existing["yes_qty"]) > 0
+
+                if already_holding and mode == "replay":
+                    # In replay mode, check SL/TP using current book price
+                    try:
+                        book = service.adapter.get_orderbook(market_slug)
+                        mid = (book.best_bid + book.best_ask) / 2
+                        avg_cost = Decimal(existing["avg_yes_cost"])
+                        yes_qty = Decimal(existing["yes_qty"])
+                        if avg_cost > 0:
+                            pct_change = (mid - avg_cost) / avg_cost
+                            # Stop-loss
+                            if pct_change <= -settings.stop_loss_pct:
+                                from .resolver import CloseResult
+                                pnl = (mid - avg_cost) * yes_qty
+                                # Close the position
+                                ts_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                                service.db.conn.execute(
+                                    "UPDATE positions SET yes_qty='0', updated_ts=? WHERE market_id=?",
+                                    (ts_now, market_slug))
+                                proceeds = mid * yes_qty
+                                service.db.add_cash_entry(ts_now, "sell_stop_loss", proceeds, market_id=market_slug)
+                                service.db.add_realized_pnl(ts_now, market_slug, pnl, note="stop_loss")
+                                service.db.conn.commit()
+                                log.info("[SL] tick=%d %s pnl=$%.4f (%.1f%%)", tick, market_slug, float(pnl), float(pct_change*100))
+                                telegram.send_trade_closed(market_slug, yes_qty, avg_cost, mid, pnl, "stop_loss",
+                                    service.db.cash_balance(settings.bankroll_usdc))
+                            # Take-profit
+                            elif pct_change >= settings.take_profit_pct:
+                                pnl = (mid - avg_cost) * yes_qty
+                                ts_now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                                service.db.conn.execute(
+                                    "UPDATE positions SET yes_qty='0', updated_ts=? WHERE market_id=?",
+                                    (ts_now, market_slug))
+                                proceeds = mid * yes_qty
+                                service.db.add_cash_entry(ts_now, "sell_take_profit", proceeds, market_id=market_slug)
+                                service.db.add_realized_pnl(ts_now, market_slug, pnl, note="take_profit")
+                                service.db.conn.commit()
+                                log.info("[TP] tick=%d %s pnl=$%.4f (+%.1f%%)", tick, market_slug, float(pnl), float(pct_change*100))
+                                telegram.send_trade_closed(market_slug, yes_qty, avg_cost, mid, pnl, "take_profit",
+                                    service.db.cash_balance(settings.bankroll_usdc))
+                    except Exception as e:
+                        log.debug("[%s] replay exit check error: %r", market_slug, e)
+                    continue
+
+                if already_holding:
+                    log.debug("[%s] already holding, skip buy", market_slug)
+                    continue
                 # Generate prior-based signals
                 # (service.run_once fetches the book internally)
                 from .models import OrderBookSnapshot, BookLevel
@@ -119,6 +201,19 @@ def run_loop(
                 if mode in ("live_feed", "live"):
                     try:
                         book = service.adapter.get_orderbook(market_slug)
+
+                        # Market quality filter
+                        filt = check_market_quality(
+                            book,
+                            min_price=settings.filter_min_price,
+                            max_price=settings.filter_max_price,
+                            max_spread_pct=settings.filter_max_spread_pct,
+                            min_depth_per_side=settings.filter_min_depth,
+                        )
+                        if not filt.tradeable:
+                            log.debug("[%s] filtered: %s", market_slug, filt.reason)
+                            continue
+
                         signals = generate_signals(book, prior_probability=prior)
                     except Exception as e:
                         log.warning("[%s] book fetch for signals failed: %r", market_slug, e)

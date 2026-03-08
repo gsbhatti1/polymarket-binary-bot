@@ -41,3 +41,18 @@ class Settings:
 
     # Market discovery
     min_market_volume: float = float(os.getenv("PM_MIN_MARKET_VOLUME", "10000"))
+
+    # Market filter
+    filter_min_price: Decimal = _d("PM_FILTER_MIN_PRICE", "0.15")
+    filter_max_price: Decimal = _d("PM_FILTER_MAX_PRICE", "0.85")
+    filter_max_spread_pct: Decimal = _d("PM_FILTER_MAX_SPREAD_PCT", "0.10")
+    filter_min_depth: Decimal = _d("PM_FILTER_MIN_DEPTH", "100")
+
+    # Drawdown circuit breaker
+    max_drawdown_pct: Decimal = _d("PM_MAX_DRAWDOWN_PCT", "0.15")
+
+    # Slippage protection
+    max_slippage_bps: int = int(os.getenv("PM_MAX_SLIPPAGE_BPS", "50"))
+
+    # Auto-discover markets
+    auto_discover_limit: int = int(os.getenv("PM_AUTO_DISCOVER_LIMIT", "10"))

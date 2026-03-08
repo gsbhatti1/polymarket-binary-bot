@@ -2,6 +2,7 @@ __all__ = [
     "config",
     "db",
     "market_feed",
+    "market_filter",
     "models",
     "resolver",
     "risk",
@@ -9,4 +10,5 @@ __all__ = [
     "service",
     "signals",
     "strategy",
+    "telegram",
 ]

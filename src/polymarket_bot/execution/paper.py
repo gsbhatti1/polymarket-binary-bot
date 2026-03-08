@@ -24,7 +24,7 @@ class PaperExchangeAdapter(ExchangeAdapter):
         self._id_counter = count(1)
 
     def get_orderbook(self, market_id: str) -> OrderBookSnapshot:
-        book = self.replay.next()
+        book = self.replay.next(market_id=market_id)
         self._last_book = book
         return book
 
